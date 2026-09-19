@@ -1,2 +1,17 @@
 # Normalize EOL for all files that Git considers text files.
 * text=auto eol=lf
+
+# Godot Asset Library: Exclude repository files from archive exports
+# Only the addons/ directory will be included in the downloaded archive
+/.editorconfig export-ignore
+/.gitattributes export-ignore
+/.gitignore export-ignore
+/.github export-ignore
+/.godot export-ignore
+/.vscode export-ignore
+/icon.svg export-ignore
+/icon.svg.import export-ignore
+/project.godot export-ignore
+/README.md export-ignore
+/LICENSE export-ignore
+
