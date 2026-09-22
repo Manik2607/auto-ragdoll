@@ -496,16 +496,16 @@ func _classify_bone_to_slot(bone_name: String) -> String:
 	elif "right" in lower:
 		side = "right"
 		stripped = lower.replace("right", "")
-	elif lower.begins_with("l_") or lower.begins_with("l.") or lower.begins_with("l "):
+	elif lower.begins_with("l_") or lower.begins_with("l.") or lower.begins_with("l ") or lower.begins_with("l-"):
 		side = "left"
 		stripped = lower.substr(2)
-	elif lower.begins_with("r_") or lower.begins_with("r.") or lower.begins_with("r "):
+	elif lower.begins_with("r_") or lower.begins_with("r.") or lower.begins_with("r ") or lower.begins_with("r-"):
 		side = "right"
 		stripped = lower.substr(2)
-	elif lower.ends_with("_l") or lower.ends_with(".l") or lower.ends_with(" l"):
+	elif lower.ends_with("_l") or lower.ends_with(".l") or lower.ends_with(" l") or lower.ends_with("-l"):
 		side = "left"
 		stripped = lower.substr(0, lower.length() - 2)
-	elif lower.ends_with("_r") or lower.ends_with(".r") or lower.ends_with(" r"):
+	elif lower.ends_with("_r") or lower.ends_with(".r") or lower.ends_with(" r") or lower.ends_with("-r"):
 		side = "right"
 		stripped = lower.substr(0, lower.length() - 2)
 
@@ -539,14 +539,96 @@ func _classify_bone_to_slot(bone_name: String) -> String:
 	return ""
 
 func _strip_prefix(bone_name: String) -> String:
-	var lower = bone_name.to_lower()
+	return strip_bone_prefix(bone_name)
+
+static func strip_bone_prefix(bone_name: String) -> String:
+	if bone_name.is_empty():
+		return ""
+
+	var s: String = bone_name
+
+	# 1. Strip namespace/hierarchy paths (e.g. "Namespace:Bone", "Rig|Bone", "Path/Bone")
+	for sep in [":", "|", "/"]:
+		var last_idx: int = s.rfind(sep)
+		if last_idx != -1 and last_idx < s.length() - 1:
+			s = s.substr(last_idx + 1)
+
+	# 2. Check for known rig patterns via RegEx:
+	# Mixamo rigs with any number: mixamorig, mixamorig0-99, mixamo, mixamo0-99 with optional separator
+	var mixamo_regex = RegEx.create_from_string("^(?i)mixamo(?:rig)?\\d*[_.:\\s-]*")
+	if mixamo_regex:
+		var m = mixamo_regex.search(s)
+		if m and m.get_end() > 0 and m.get_end() < s.length():
+			return s.substr(m.get_end())
+
+	# Biped rigs: bip01_, bip001_, valvebiped.bip01_, biped_
+	var biped_regex = RegEx.create_from_string("^(?i)(?:valvebiped\\.)?(?:bip|biped)\\d*[_.:\\s-]*")
+	if biped_regex:
+		var m = biped_regex.search(s)
+		if m and m.get_end() > 0 and m.get_end() < s.length():
+			return s.substr(m.get_end())
+
+	# Rigify / CC / VRM / MetaRig / Generic technical prefixes
+	var tech_regex = RegEx.create_from_string("^(?i)(?:cc_base|def|deform|mch|org|vrm|metarig|rig\\d*|j|jnt|bone|character\\d*|char\\d*|actor\\d*|player\\d*|bot\\d*|npc\\d*|model\\d*)[_.:\\s-]+")
+	if tech_regex:
+		var m = tech_regex.search(s)
+		if m and m.get_end() > 0 and m.get_end() < s.length():
+			return s.substr(m.get_end())
+
+	# 3. Known static prefixes fallback list
+	var lower_s = s.to_lower()
 	for p in KNOWN_PREFIXES:
-		if lower.begins_with(p):
-			return bone_name.substr(p.length())
-	return bone_name
+		if lower_s.begins_with(p):
+			s = s.substr(p.length())
+			lower_s = s.to_lower()
+			break
+
+	# 4. Generalized prefix stripper ("the front of the name should not matter")
+	# If the bone has delimiters (_ or -), scan segments from left to right.
+	# Any segment before a recognized bone or side keyword is stripped.
+	for delim in ["_", "-"]:
+		if delim in s:
+			var parts = s.split(delim)
+			if parts.size() > 1:
+				for i in range(parts.size()):
+					var seg = parts[i].to_lower()
+					if _is_bone_keyword(seg):
+						if i > 0:
+							var remaining: PackedStringArray = []
+							for j in range(i, parts.size()):
+								remaining.append(parts[j])
+							return delim.join(remaining)
+						break
+
+	return s
+
+static func _is_bone_keyword(seg: String) -> bool:
+	if seg.is_empty():
+		return false
+	if seg == "l" or seg == "r":
+		return true
+	if seg.begins_with("left") or seg.begins_with("right"):
+		return true
+	if seg.begins_with("upper") or seg.begins_with("up") or seg.begins_with("lower") or seg.begins_with("low") or seg.begins_with("mid") or seg.begins_with("middle"):
+		return true
+	if seg.begins_with("hip") or seg.begins_with("pelvis") or seg.begins_with("root"):
+		return true
+	if seg.begins_with("spine") or seg.begins_with("chest") or seg.begins_with("torso") or seg.begins_with("abdomen"):
+		return true
+	if seg.begins_with("neck") or seg.begins_with("head") or seg.begins_with("skull") or seg.begins_with("cranium"):
+		return true
+	if seg.begins_with("shoulder") or seg.begins_with("clavicle"):
+		return true
+	if seg.begins_with("arm") or seg.begins_with("forearm") or seg.begins_with("elbow") or seg.begins_with("hand") or seg.begins_with("wrist") or seg.begins_with("palm"):
+		return true
+	if seg.begins_with("leg") or seg.begins_with("thigh") or seg.begins_with("calf") or seg.begins_with("shin") or seg.begins_with("knee") or seg.begins_with("foot") or seg.begins_with("ankle") or seg.begins_with("heel") or seg.begins_with("toe"):
+		return true
+	if seg.begins_with("femur") or seg.begins_with("tibia") or seg.begins_with("radius") or seg.begins_with("ulna") or seg.begins_with("humerus"):
+		return true
+	return false
 
 func _score_bone_match(bone_name: String, slot_key: String) -> int:
-	var lower = bone_name.to_lower()
+	var lower = _strip_prefix(bone_name).to_lower()
 	var score = 10
 
 	if slot_key == "middle_spine":

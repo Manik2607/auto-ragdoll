@@ -453,22 +453,22 @@ static func _classify_bone(bone_name: String) -> String:
 	elif "right" in n:
 		side = "right"
 		stripped = n.replace("right", "")
-	elif n.begins_with("l_") or n.begins_with("l.") or n.begins_with("l "):
+	elif n.begins_with("l_") or n.begins_with("l.") or n.begins_with("l ") or n.begins_with("l-"):
 		side = "left"
 		stripped = n.substr(2)
-	elif n.begins_with("r_") or n.begins_with("r.") or n.begins_with("r "):
+	elif n.begins_with("r_") or n.begins_with("r.") or n.begins_with("r ") or n.begins_with("r-"):
 		side = "right"
 		stripped = n.substr(2)
-	elif n.ends_with("_l") or n.ends_with(".l"):
+	elif n.ends_with("_l") or n.ends_with(".l") or n.ends_with(" l") or n.ends_with("-l"):
 		side = "left"
 		stripped = n.substr(0, n.length() - 2)
-	elif n.ends_with("_r") or n.ends_with(".r"):
+	elif n.ends_with("_r") or n.ends_with(".r") or n.ends_with(" r") or n.ends_with("-r"):
 		side = "right"
 		stripped = n.substr(0, n.length() - 2)
 
-	var clean = stripped.replace("_", "").replace(".", "").replace(" ", "").replace("-", "")
+	var clean = stripped.replace("_", "").replace(".", "").replace(" ", "").replace("-", "").replace(":", "")
 
-	if clean in ["hips", "hip", "pelvis"]:
+	if clean in ["hips", "hip", "pelvis", "root"]:
 		return "hips"
 	if clean in ["spine2", "spine02", "chest"]:
 		return "spine2"
@@ -476,7 +476,7 @@ static func _classify_bone(bone_name: String) -> String:
 		return "spine1"
 	if clean in ["spine", "spine0", "spine00", "abdomen"]:
 		return "spine"
-	if clean == "head":
+	if clean in ["head", "skull", "cranium"]:
 		return "head"
 
 	if side.is_empty():
@@ -484,27 +484,109 @@ static func _classify_bone(bone_name: String) -> String:
 
 	if clean in ["shoulder", "clavicle"]:
 		return side + "_shoulder"
-	if clean in ["forearm", "lowerarm"]:
+	if clean in ["forearm", "lowerarm", "elbow", "radius", "ulna"]:
 		return side + "_forearm"
-	if clean in ["arm", "upperarm"]:
+	if clean in ["arm", "upperarm", "uparm", "bicep", "humerus"]:
 		return side + "_upper_arm"
-	if clean == "hand":
+	if clean in ["hand", "wrist", "palm"]:
 		return side + "_hand"
-	if clean in ["upleg", "upperleg", "thigh"]:
+	if clean in ["upleg", "upperleg", "thigh", "femur"]:
 		return side + "_upper_leg"
-	if clean in ["leg", "lowerleg", "calf", "shin"]:
+	if clean in ["leg", "lowerleg", "calf", "shin", "knee", "tibia"]:
 		return side + "_lower_leg"
-	if clean in ["foot", "ankle"]:
+	if clean in ["foot", "ankle", "heel"]:
 		return side + "_foot"
 
 	return ""
 
 static func _strip_known_prefix(bone_name: String) -> String:
-	var lower = bone_name.to_lower()
-	for prefix in KNOWN_PREFIXES:
-		if lower.begins_with(prefix):
-			return bone_name.substr(prefix.length())
-	return bone_name
+	return strip_bone_prefix(bone_name)
+
+static func strip_bone_prefix(bone_name: String) -> String:
+	if bone_name.is_empty():
+		return ""
+
+	var s: String = bone_name
+
+	# 1. Strip namespace/hierarchy paths (e.g. "Namespace:Bone", "Rig|Bone", "Path/Bone")
+	for sep in [":", "|", "/"]:
+		var last_idx: int = s.rfind(sep)
+		if last_idx != -1 and last_idx < s.length() - 1:
+			s = s.substr(last_idx + 1)
+
+	# 2. Check for known rig patterns via RegEx:
+	# Mixamo rigs with any number: mixamorig, mixamorig0-99, mixamo, mixamo0-99 with optional separator
+	var mixamo_regex = RegEx.create_from_string("^(?i)mixamo(?:rig)?\\d*[_.:\\s-]*")
+	if mixamo_regex:
+		var m = mixamo_regex.search(s)
+		if m and m.get_end() > 0 and m.get_end() < s.length():
+			return s.substr(m.get_end())
+
+	# Biped rigs: bip01_, bip001_, valvebiped.bip01_, biped_
+	var biped_regex = RegEx.create_from_string("^(?i)(?:valvebiped\\.)?(?:bip|biped)\\d*[_.:\\s-]*")
+	if biped_regex:
+		var m = biped_regex.search(s)
+		if m and m.get_end() > 0 and m.get_end() < s.length():
+			return s.substr(m.get_end())
+
+	# Rigify / CC / VRM / MetaRig / Generic technical prefixes
+	var tech_regex = RegEx.create_from_string("^(?i)(?:cc_base|def|deform|mch|org|vrm|metarig|rig\\d*|j|jnt|bone|character\\d*|char\\d*|actor\\d*|player\\d*|bot\\d*|npc\\d*|model\\d*)[_.:\\s-]+")
+	if tech_regex:
+		var m = tech_regex.search(s)
+		if m and m.get_end() > 0 and m.get_end() < s.length():
+			return s.substr(m.get_end())
+
+	# 3. Known static prefixes fallback list
+	var lower_s = s.to_lower()
+	for p in KNOWN_PREFIXES:
+		if lower_s.begins_with(p):
+			s = s.substr(p.length())
+			lower_s = s.to_lower()
+			break
+
+	# 4. Generalized prefix stripper ("the front of the name should not matter")
+	# If the bone has delimiters (_ or -), scan segments from left to right.
+	# Any segment before a recognized bone or side keyword is stripped.
+	for delim in ["_", "-"]:
+		if delim in s:
+			var parts = s.split(delim)
+			if parts.size() > 1:
+				for i in range(parts.size()):
+					var seg = parts[i].to_lower()
+					if _is_bone_keyword(seg):
+						if i > 0:
+							var remaining: PackedStringArray = []
+							for j in range(i, parts.size()):
+								remaining.append(parts[j])
+							return delim.join(remaining)
+						break
+
+	return s
+
+static func _is_bone_keyword(seg: String) -> bool:
+	if seg.is_empty():
+		return false
+	if seg == "l" or seg == "r":
+		return true
+	if seg.begins_with("left") or seg.begins_with("right"):
+		return true
+	if seg.begins_with("upper") or seg.begins_with("up") or seg.begins_with("lower") or seg.begins_with("low") or seg.begins_with("mid") or seg.begins_with("middle"):
+		return true
+	if seg.begins_with("hip") or seg.begins_with("pelvis") or seg.begins_with("root"):
+		return true
+	if seg.begins_with("spine") or seg.begins_with("chest") or seg.begins_with("torso") or seg.begins_with("abdomen"):
+		return true
+	if seg.begins_with("neck") or seg.begins_with("head") or seg.begins_with("skull") or seg.begins_with("cranium"):
+		return true
+	if seg.begins_with("shoulder") or seg.begins_with("clavicle"):
+		return true
+	if seg.begins_with("arm") or seg.begins_with("forearm") or seg.begins_with("elbow") or seg.begins_with("hand") or seg.begins_with("wrist") or seg.begins_with("palm"):
+		return true
+	if seg.begins_with("leg") or seg.begins_with("thigh") or seg.begins_with("calf") or seg.begins_with("shin") or seg.begins_with("knee") or seg.begins_with("foot") or seg.begins_with("ankle") or seg.begins_with("heel") or seg.begins_with("toe"):
+		return true
+	if seg.begins_with("femur") or seg.begins_with("tibia") or seg.begins_with("radius") or seg.begins_with("ulna") or seg.begins_with("humerus"):
+		return true
+	return false
 
 static func _compute_measurements(skeleton: Skeleton3D, bone_map: Dictionary) -> Dictionary:
 	var results: Dictionary = {}
